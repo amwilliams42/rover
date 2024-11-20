@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "apps/server",
+    "apps/client/src-tauri",
+    "libs/shared-types",
+]
