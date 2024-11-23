@@ -14,3 +14,7 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 time = "0.3.36"
 hyper = "1.5.1"
+dotenvy = {version = "*"}
+dotenvy_macro = {version = "*"}
+sqlx = {version = "0.8.2", features = ["postgres", "macros", "runtime-tokio", "time"]}
+futures-util = "0.3.31"

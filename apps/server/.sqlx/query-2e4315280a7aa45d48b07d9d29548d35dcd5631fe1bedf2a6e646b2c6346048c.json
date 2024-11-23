@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO action_logs \n        (timestamp, action_type, user_id, ip_address, details)\n        VALUES ($1, $2, $3, $4, $5)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        {
+          "Custom": {
+            "name": "action_type",
+            "kind": {
+              "Enum": [
+                "Connect",
+                "Disconnect",
+                "CreateCall",
+                "UpdateCall",
+                "DeleteCall",
+                "OpenCall"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e4315280a7aa45d48b07d9d29548d35dcd5631fe1bedf2a6e646b2c6346048c"
+}

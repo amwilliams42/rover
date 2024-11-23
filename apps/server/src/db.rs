@@ -1,5 +1,5 @@
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
-use shared_types::ActionLog;
+use crate::logging::ActionLog;
 
 pub type DbPool = Pool<Postgres>;
 
@@ -29,6 +29,5 @@ pub async fn save_action_log(pool: &DbPool, log: &ActionLog) -> Result<(), sqlx:
     )
     .execute(pool)
     .await?;
-
     Ok(())
 }
