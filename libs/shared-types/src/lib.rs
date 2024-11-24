@@ -1,55 +1,31 @@
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use std::net::IpAddr;
+mod incident;
 
+/// Protocol messages that can be sent in either direction
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ActionLog {
-    pub timestamp: OffsetDateTime,
-    pub action_type: ActionType,
-    pub user_id: Option<String>,
-    pub ip_address: Option<IpAddr>,
-    pub details: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum ActionType {
-    Connect,
-    Disconnect,
+#[serde(tag = "type", content = "payload")]
+pub enum ProtocolMessage {
+    #[serde(rename = "ping")]
+    Ping,
+    #[serde(rename = "get_active_calls")]
+    GetActiveCalls,
+    #[serde(rename = "get_call")]
+    GetCall { id: String },
+    #[serde(rename = "create_call")]
     CreateCall,
-    UpdateCall,
-    DeleteCall,
-    OpenCall,
+    #[serde(rename = "update_call")]
+    UpdateCall { id: String },
+    Text(String),
+    Json(String),
 }
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ServerMessage{
-    pub message_type: MessageType,
-    pub payload: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum MessageType{
-    StateUpdate,
-    Error,
-    Acknowledgment
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::net::IpAddr;
-    use std::str::FromStr;
-
-    #[test]
-    fn test_action_log_with_ip() {
-        let log = ActionLog {
-            timestamp: OffsetDateTime::now_utc(),
-            action_type: ActionType::Connect,
-            user_id: Some("user123".to_string()),
-            ip_address: Some(IpAddr::from_str("127.0.0.1").unwrap()),
-            details: "Test connection".to_string(),
-        };
-        
-        assert!(log.ip_address.is_some());
-    }
+pub struct Call {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_open: bool,
 }

@@ -39,7 +39,7 @@
   import { useStatusStore } from '@/stores/statusStore';
   import { toolbarConfig } from '@/components/toolbarConfig';
   import { useRoute } from 'vue-router';
-import { screensConfig } from '@/screensConfig';
+  import { screensConfig } from '@/screensConfig';
   
   export default defineComponent({
     name: 'MainWindow',

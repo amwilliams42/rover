@@ -29,13 +29,16 @@
           </CardContent>
         </Card>
       </div>
+      <WebSocketTest />
     </div>
+
   </template>
   
   <script lang="ts" setup>
   import { ref } from 'vue';
   import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
   import { Button } from '@/components/ui/button';
+  import WebSocketTest from '../components/WebSocketTest.vue';
   
   interface Call {
     id: number;

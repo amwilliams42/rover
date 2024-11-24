@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use std::net::IpAddr;
+use std::net::SocketAddr;
 
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -8,7 +8,7 @@ pub struct ActionLog {
     pub timestamp: OffsetDateTime,
     pub action_type: ActionType,
     pub user_id: Option<String>,
-    pub ip_address: Option<IpAddr>,
+    pub ip_address: Option<SocketAddr>,
     pub details: String,
 }
 

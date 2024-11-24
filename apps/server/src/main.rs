@@ -1,36 +1,43 @@
-use axum::{
-    extract::{ConnectInfo, State, ws::{Message, WebSocket, WebSocketUpgrade}},
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
-use logging::ActionType;
-mod logging;
-use crate::logging::ActionLog;
-use std::{net::{IpAddr, SocketAddr}, sync::Arc};
-use time::OffsetDateTime;
-use tokio::sync::RwLock;
-use tracing::{info, error, Level};
-use futures_util::{sink::SinkExt, stream::{StreamExt, SplitSink, SplitStream}};
-use tracing_subscriber::FmtSubscriber;
-use dotenvy;
-use std::env;
-mod db;
-use crate::db::*;
+use std::{net::SocketAddr, ops::ControlFlow, sync::Arc, time::Duration};
 
+use axum::{
+    extract::{ws::
+        {Message, WebSocket}, ConnectInfo, State, WebSocketUpgrade
+    }, response::IntoResponse, routing::get, Router
+};
+use axum_extra::{headers, TypedHeader};
+use futures_util::{SinkExt, StreamExt};
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+mod db;
+mod logging;
+mod auth;
+use auth::{cloudflare_auth_middleware, CloudflareAuth};
+use db::{create_pool, DbPool};
+
+use axum::middleware;
+
+
+
+
+#[derive(Debug, Clone)]
 pub struct AppState {
-    db: DbPool,
+    pub db: DbPool,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    
+async fn main() {
     // Setup logging
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
-
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                format!("{}=debug,tower_http=debug", env!("CARGO_CRATE_NAME")).into()
+            }),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+    
     // Initialize database
     let db_pool = create_pool().await;
     
@@ -39,88 +46,142 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db: db_pool 
     });
 
+    // Initialize Cloudflare authentication middleware
+    let cloudflare_config = auth::CloudflareConfig::new(
+        "awilliams92.cloudflareaccess.com", 
+        "example.com"
+    );
+    let cf_auth = Arc::new(CloudflareAuth::new(cloudflare_config).await);
+
+
     // Setup router
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::default().include_headers(true))
+        )
         .with_state(state);
 
     // Start server
-    info!("Server starting on port 3000");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-
-    Ok(())
-}
-
-async fn log_action(
-    state: &AppState,
-    action_type: ActionType,
-    user_id: Option<String>,
-    ip_address: Option<IpAddr>,
-    details: String,
-) -> Result<(), sqlx::Error> {
-    let log = ActionLog {
-        timestamp: OffsetDateTime::now_utc(),
-        action_type,
-        user_id,
-        ip_address,
-        details,
-    };
-
-    save_action_log(&state.db, &log).await?;
-    info!(?log, "Action logged to database");
-    Ok(())
+    tracing::debug!("Listening on: {}", listener.local_addr().unwrap());
+    axum::serve(
+        listener, 
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    ).await.unwrap();
 }
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state, addr))
+    let _user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
+        user_agent.to_string()
+    } else {
+        String::from("Unknown browser")
+    };
+
+    
+
+    ws.on_upgrade(move |socket| handle_socket(socket, addr))
 }
 
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>, addr: SocketAddr) {
-    if let Err(e) = log_action(
-        &state,
-        ActionType::Connect,
-        None,
-        Some(addr.ip()),
-        "New WebSocket connection".to_string(),
-    ).await {
-        error!("Failed to log connection: {}", e);
+async fn handle_socket(socket: WebSocket, addr: SocketAddr) {
+    let (mut sender, mut receiver) = socket.split();
+    
+    let (ping_tx, mut ping_rx) = tokio::sync::mpsc::channel(32);
+
+    // Send initial ping
+    if sender.send(Message::Ping(vec![1, 2, 3])).await.is_ok() {
+        tracing::info!("Sent ping to {}", addr);
+    } else {
+        tracing::error!("Failed to send ping to {}", addr);
+        return;
     }
 
-    let (mut sender, mut receiver) = socket.split();
-
-    // Handle incoming messages
-    while let Some(Ok(message)) = receiver.next().await {
-        match message {
-            Message::Text(text) => {
-                if let Err(e) = log_action(
-                    &state,
-                    ActionType::UpdateCall,
-                    None,
-                    Some(addr.ip()),
-                    format!("Received message: {}", text),
-                ).await {
-                    error!("Failed to log message: {}", e);
-                }
-                // Handle message processing here
-            }
-            Message::Close(_) => {
-                if let Err(e) = log_action(
-                    &state,
-                    ActionType::Disconnect,
-                    None,
-                    Some(addr.ip()),
-                    "WebSocket disconnected".to_string(),
-                ).await {
-                    error!("Failed to log disconnection: {}", e);
-                }
+    let ping_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            tracing::info!("Sending ping to {}", addr);
+            if ping_tx.send(Message::Ping(vec![1, 2, 3])).await.is_err() {
                 break;
             }
-            _ => {}
+        }
+    });
+
+     // Spawn task to forward ping messages to the WebSocket
+     let forward_task = tokio::spawn(async move {
+        while let Some(msg) = ping_rx.recv().await {
+            if sender.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Main message loop
+    // Main message loop
+    while let Some(msg) = receiver.next().await {
+        match msg {
+            Ok(message) => {
+                match message {
+                    Message::Text(text) => {
+                        tracing::debug!("Received text message from {}: {}", addr, text);
+                        // Process text message if needed
+                    }
+                    Message::Ping(_payload) => {
+                        tracing::debug!("Received ping from {}", addr);
+                        // No need to manually respond - axum handles pings automatically
+                    }
+                    Message::Pong(_) => {
+                        tracing::debug!("Received pong from {}", addr);
+                    }
+                    Message::Close(_) => {
+                        tracing::info!("Client {} requested close", addr);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                tracing::error!("Error receiving message from {}: {}", addr, e);
+                break;
+            }
+        }
+    }
+
+    // Clean up
+    ping_task.abort();
+    forward_task.abort();
+    
+    tracing::info!("Client {} disconnected", addr);
+}
+
+// Helper function to process messages (if needed)
+fn process_message(msg: Message, addr: SocketAddr) -> ControlFlow<(), ()> {
+    match msg {
+        Message::Text(text) => {
+            tracing::debug!("Received text message from {}: {}", addr, text);
+            ControlFlow::Continue(())
+        }
+        Message::Binary(data) => {
+            tracing::debug!("Received {} bytes from {}", data.len(), addr);
+            ControlFlow::Continue(())
+        }
+        Message::Ping(_) => {
+            tracing::debug!("Received ping from {}", addr);
+            ControlFlow::Continue(())
+        }
+        Message::Pong(_) => {
+            tracing::debug!("Received pong from {}", addr);
+            ControlFlow::Continue(())
+        }
+        Message::Close(_) => {
+            tracing::info!("Client {} requested close", addr);
+            ControlFlow::Break(())
         }
     }
 }
