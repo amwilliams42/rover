@@ -3,7 +3,7 @@ use std::{net::SocketAddr, ops::ControlFlow, sync::Arc, time::Duration};
 use axum::{
     extract::{ws::
         {Message, WebSocket}, ConnectInfo, State, WebSocketUpgrade
-    }, response::IntoResponse, routing::get, Router
+    }, middleware::from_fn_with_state, response::IntoResponse, routing::get, Router
 };
 use axum_extra::{headers, TypedHeader};
 use futures_util::{SinkExt, StreamExt};
@@ -13,6 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod db;
 mod logging;
 mod auth;
+mod users;
 use auth::{cloudflare_auth_middleware, CloudflareAuth};
 use db::{create_pool, DbPool};
 
@@ -21,9 +22,23 @@ use axum::middleware;
 
 
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
+    pub cf_auth: Arc<CloudflareAuth>,
+}
+
+impl AppState {
+    pub async fn new() -> Self {
+        let db_pool = create_pool().await;
+
+        let cloudflare_config = auth::CloudflareConfig::new(
+            dotenvy::var("CF_TEAM_NAME").unwrap(),
+            dotenvy::var("CLOUDFLARE_AUD").unwrap(),
+        );
+        let cf_auth = Arc::new(CloudflareAuth::new(cloudflare_config).await.unwrap());
+        Self { db: db_pool, cf_auth }
+    }
 }
 
 #[tokio::main]
@@ -42,21 +57,12 @@ async fn main() {
     let db_pool = create_pool().await;
     
     // Create shared state
-    let state = Arc::new(AppState { 
-        db: db_pool 
-    });
-
-    // Initialize Cloudflare authentication middleware
-    let cloudflare_config = auth::CloudflareConfig::new(
-        "awilliams92.cloudflareaccess.com", 
-        "example.com"
-    );
-    let cf_auth = Arc::new(CloudflareAuth::new(cloudflare_config).await);
-
+    let state = Arc::new(AppState::new().await);
 
     // Setup router
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .layer(from_fn_with_state(state.clone(), cloudflare_auth_middleware))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(true))
@@ -64,7 +70,7 @@ async fn main() {
         .with_state(state);
 
     // Start server
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3031").await.unwrap();
     tracing::debug!("Listening on: {}", listener.local_addr().unwrap());
     axum::serve(
         listener, 

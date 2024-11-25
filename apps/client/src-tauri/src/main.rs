@@ -1,10 +1,14 @@
+use reqwest::{Method, Request};
 // src-tauri/src/main.rs
-use tauri::Emitter;
+use tauri::{http::{self, request, Uri}, Emitter, Url};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream, MaybeTlsStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+use reqwest::header::{HeaderMap, HeaderValue};
+
+
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -90,17 +94,109 @@ async fn handle_ws_messages(
     send_task.abort();
 }
 
+async fn get_warp_token(server_url: &str) -> Option<String> {
+    let client = reqwest::Client::new();
+    
+    println!("Checking WARP status for: {}", server_url);
+    
+    // Try to make a request through WARP
+    match client.head(server_url)
+        .send()
+        .await {
+            Ok(response) => {
+                println!("WARP check response status: {}", response.status());
+                println!("WARP check headers: {:?}", response.headers());
+                
+                // Check for WARP token in headers
+                if let Some(token) = response.headers().get("CF-Access-Jwt-Assertion") {
+                    println!("Found WARP token");
+                    return Some(token.to_str().unwrap_or_default().to_string());
+                }
+
+                // Also check Cookies for CF_Authorization
+                if let Some(cookies) = response.headers().get("set-cookie") {
+                    if let Ok(cookie_str) = cookies.to_str() {
+                        if cookie_str.contains("CF_Authorization=") {
+                            println!("Found CF_Authorization cookie");
+                            if let Some(token) = cookie_str
+                                .split(';')
+                                .find(|s| s.trim().starts_with("CF_Authorization="))
+                                .and_then(|s| s.split('=').nth(1)) {
+                                return Some(token.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Failed to get WARP token: {}", e);
+            }
+        }
+    
+    println!("No WARP token found");
+    None
+}
+
+// Helper function to generate WebSocket key
+fn generate_key() -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use rand::Rng;
+    
+    let mut key = [0u8; 16];
+    rand::thread_rng().fill(&mut key);
+    STANDARD.encode(key)
+}
+
 async fn connect_websocket(
     app_handle: tauri::AppHandle,
     state: Arc<WebSocketState>
 ) {
-    let ws_url = "ws://localhost:3000/ws";
+    let server_url = "https://rover.furcondispatch.org:3031";
+    let ws_url = "wss://rover.furcondispatch.org:3031/ws";
     
     loop {
         println!("Attempting to connect to {}", ws_url);
         app_handle.emit("ws-status", "connecting").unwrap_or_default();
 
-        match connect_async(ws_url).await {
+        let token = get_warp_token(server_url).await;
+
+        let ws_url = match Url::parse(ws_url) {
+            Ok(url) => url,
+            Err(e) => {
+                println!("Failed to parse WebSocket URL: {}", e);
+                continue;
+            }
+        };
+
+        let mut request = Request::new(Method::GET, ws_url.clone());
+
+        // Add required WebSocket headers
+        let headers = request.headers_mut();
+        headers.insert("Host", HeaderValue::from_str(ws_url.host_str().unwrap_or_default()).unwrap());
+        headers.insert("Upgrade", HeaderValue::from_static("websocket"));
+        headers.insert("Connection", HeaderValue::from_static("Upgrade"));
+        headers.insert("Sec-WebSocket-Version", HeaderValue::from_static("13"));
+        headers.insert("Sec-WebSocket-Key", HeaderValue::from_str(&generate_key()).unwrap());
+        headers.insert("Sec-WebSocket-Protocol", HeaderValue::from_static("rust-websocket"));
+        
+        // Add authorization if we have a token
+        if let Some(token) = &token {
+            println!("Adding authorization token to request");
+            if let Ok(auth_value) = HeaderValue::from_str(&format!("Bearer {}", token)) {
+                headers.insert("Authorization", auth_value);
+            }
+
+            // Also add as cookie just in case
+            if let Ok(cookie_value) = HeaderValue::from_str(&format!("CF_Authorization={}", token)) {
+                headers.insert("Cookie", cookie_value);
+            }
+        } else {
+            println!("No authorization token available");
+        }
+
+        println!("Request headers: {:?}", headers);
+
+        match connect_async(ws_url.as_str()).await {
             Ok((ws_stream, _)) => {
                 println!("WebSocket connected successfully!");
                 app_handle.emit("ws-status", "connected").unwrap_or_default();

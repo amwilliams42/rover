@@ -866,6 +866,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3965,6 +3966,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4046,6 +4048,7 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4085,6 +4088,7 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4110,6 +4114,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4582,8 +4587,11 @@ dependencies = [
 name = "tauriv2-vue-desktop-starter"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "futures-util",
+ "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "shared-types",

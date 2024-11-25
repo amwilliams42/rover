@@ -25,6 +25,9 @@ tokio-tungstenite = "0.24.0"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 chrono = "0.4.38"
+reqwest = "0.12.9"
+base64 = "0.22.1"
+rand = "0.8.5"
 
 
 [profile.dev]

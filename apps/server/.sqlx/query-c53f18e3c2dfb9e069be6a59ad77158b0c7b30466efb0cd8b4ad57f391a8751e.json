@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM user_sessions\n            WHERE last_ping < NOW() - INTERVAL '1 minute' * $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c53f18e3c2dfb9e069be6a59ad77158b0c7b30466efb0cd8b4ad57f391a8751e"
+}
